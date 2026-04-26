@@ -1,0 +1,632 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>水龙头滴水实验 · 多模型拟合 · 误差解决 · 水量预测</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js">
+    </script>
+    <style>
+        :root {
+            --primary: #1e3c5c;
+            --blue: #2c5f8a;
+            --green: #27ae60;
+            --orange: #e67e22;
+            --red: #c0392b;
+            --bg: #f4f6f9;
+            --card: #ffffff;
+            --shadow: 0 3px 10px rgba(0,0,0,0.05);
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: 'Segoe UI', 'Microsoft YaHei', sans-serif; background: var(--bg); padding: 20px; color: #2c3e50; }
+        .container { max-width: 1100px; margin: 0 auto; }
+        .card { background: var(--card); border-radius: 14px; padding: 22px; margin-bottom: 22px; box-shadow: var(--shadow); }
+        h2 { margin-bottom: 6px; }
+        table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 14px; }
+        th { background: var(--blue); color: white; padding: 8px; text-align: center; font-weight: 500; }
+        td { padding: 6px; text-align: center; border-bottom: 1px solid #e8ecf1; }
+        input[type="number"] { width: 85px; padding: 6px; text-align: center; border: 1px solid #cad6e3; border-radius: 5px; font-size: 14px; }
+        .btn { background: var(--blue); color: white; border: none; padding: 9px 18px; border-radius: 6px; cursor: pointer; font-size: 14px; margin-right: 8px; transition: 0.2s; }
+        .btn:hover { background: #1a4a6a; }
+        .btn-outline { background: white; color: var(--blue); border: 1px solid var(--blue); }
+        .btn-outline:hover { background: #eef3f8; }
+        .row-btn { background: var(--red); color: white; border: none; padding: 3px 12px; border-radius: 4px; cursor: pointer; font-size: 12px; }
+        .chart-box { width: 100%; height: 450px; margin: 15px 0; }
+        .model-card { background: #fefefe; border: 1px solid #e1e8f0; border-radius: 10px; padding: 12px; margin: 8px 0; }
+        .best-model { border: 2px solid var(--green); background: #f0faf4; }
+        .badge { display: inline-block; background: var(--green); color: white; padding: 2px 10px; border-radius: 12px; font-size: 12px; margin-left: 8px; }
+        .analysis-box, .solution-box { padding: 15px; border-radius: 8px; margin-top: 12px; }
+        .analysis-box { background: #fff9e5; border-left: 5px solid var(--orange); }
+        .solution-box { background: #eafaf1; border-left: 5px solid var(--green); }
+        .analysis-box p, .solution-box p { margin: 6px 0; font-size: 14px; }
+        .two-cols { display: flex; gap: 20px; flex-wrap: wrap; }
+        .col { flex: 1; min-width: 280px; }
+        .predict-unit { width: 100px; padding: 6px; border: 1px solid #cad6e3; border-radius: 5px; }
+        .toggle-section { margin-top: 15px; }
+        @media (max-width: 700px) { .two-cols { flex-direction: column; } }
+    </style>
+</head>
+<body>
+<div class="container">
+    <!-- 大标题简化 -->
+    <div class="card">
+        <h2>💧 水龙头滴水实验</h2>
+        <p>水瓶小孔滴水，记录时间与累积水量。系统自动拟合最优函数，分析误差并给出改进方案，预测任意时间的总滴水量。</p>
+    </div>
+
+    <!-- 数据录入 -->
+    <div class="card">
+        <h3>📊 实验数据录入</h3>
+        <div style="margin-bottom: 10px;">
+            <button class="btn" onclick="addRow()">➕ 添加一行</button>
+            <button class="btn btn-outline" onclick="removeRow()">➖ 删除最后一行</button>
+            <button class="btn btn-outline" onclick="loadExample1()">📥 示例1：初始有水+流速减慢</button>
+            <button class="btn btn-outline" onclick="loadExample2()">📥 示例2：近似理想数据</button>
+            <button class="btn btn-outline" onclick="loadExample3()">📥 示例3：严重弯曲（幂律）</button>
+            <button class="btn btn-outline" onclick="loadExample4()">📥 示例4：分段突变</button>
+        </div>
+        <table id="dataTable">
+            <thead><tr><th>序号</th><th>时间 t (分钟)</th><th>水量 V (毫升)</th><th>删除</th></tr></thead>
+            <tbody id="tableBody"></tbody>
+        </table>
+        <div style="margin-top:12px;">
+            <button class="btn" onclick="runAnalysis()">🔍 开始分析</button>
+            <button class="btn btn-outline" onclick="clearAll()">🗑️ 清空数据</button>
+            <label style="margin-left:15px;"><input type="checkbox" id="showAllFits" checked> 显示所有拟合曲线</label>
+        </div>
+    </div>
+
+    <!-- 分析结果区 -->
+    <div id="resultArea" style="display: none;">
+        <div class="card">
+            <h3>📈 拟合曲线对比</h3>
+            <div class="chart-box"><canvas id="fitChart"></canvas></div>
+            <div style="font-size:13px; color:#555;">● 实验数据 · 彩色曲线为各函数拟合 · <span style="color:var(--green);">绿色加粗</span>为最佳拟合</div>
+        </div>
+
+        <div class="two-cols">
+            <div class="col card">
+                <h4>📐 拟合模型结果</h4>
+                <div id="modelList"></div>
+            </div>
+            <div class="col card">
+                <!-- 两个独立的切换按钮 -->
+                <div class="toggle-section">
+                    <button class="btn btn-outline" id="toggleErrorBtn" onclick="toggleError()">🔍 显示误差分析</button>
+                    <div id="errorContainer" style="display: none;">
+                        <h4 style="margin-top:16px;">🔬 误差原因分析</h4>
+                        <div id="errorAnalysis"></div>
+                    </div>
+                </div>
+                <div class="toggle-section" style="margin-top:12px;">
+                    <button class="btn btn-outline" id="toggleSolutionBtn" onclick="toggleSolution()">💡 显示改进方案</button>
+                    <div id="solutionContainer" style="display: none;">
+                        <h4 style="margin-top:16px;">💡 改进建议（解决方案）</h4>
+                        <div id="solutionArea"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 预测工具 默认1天 -->
+        <div class="card">
+            <h3>🔮 预测任意时间的总滴水量</h3>
+            <p style="font-size:13px; color:#666;">基于当前最佳拟合模型计算，可用于估算一天、一小时甚至更长时间的总浪费量。</p>
+            <div style="display:flex; gap:12px; align-items:center; flex-wrap:wrap; margin-top:12px;">
+                <label>时间数值：<input type="number" id="predictTime" value="1" step="any" style="width:100px;"></label>
+                <label>单位：
+                    <select id="predictUnit" class="predict-unit">
+                        <option value="min">分钟</option>
+                        <option value="hour">小时</option>
+                        <option value="day" selected>天</option>
+                    </select>
+                </label>
+                <button class="btn" onclick="predictWater()">💧 预测水量</button>
+            </div>
+            <div id="predictResult" style="margin-top:15px; font-size:16px;"></div>
+        </div>
+    </div>
+</div>
+
+<script>
+    let fitChart = null;
+    let currentBestModel = null;
+
+    // ========== 表格操作 ==========
+    function initTable(rows = 6) {
+        const tbody = document.getElementById('tableBody');
+        tbody.innerHTML = '';
+        for (let i = 0; i < rows; i++) addRow();
+    }
+    function addRow() {
+        const tbody = document.getElementById('tableBody');
+        const idx = tbody.children.length + 1;
+        const tr = document.createElement('tr');
+        tr.innerHTML = `<td>${idx}</td>
+            <td><input type="number" step="any" class="tVal" placeholder="分钟"></td>
+            <td><input type="number" step="any" class="vVal" placeholder="毫升"></td>
+            <td><button class="row-btn" onclick="this.closest('tr').remove(); renumber()">删除</button></td>`;
+        tbody.appendChild(tr);
+    }
+    function removeRow() {
+        const tbody = document.getElementById('tableBody');
+        if (tbody.children.length > 1) tbody.removeChild(tbody.lastChild);
+        renumber();
+    }
+    function renumber() {
+        const rows = document.querySelectorAll('#tableBody tr');
+        rows.forEach((r, i) => { r.children[0].textContent = i + 1; });
+    }
+    function getData() {
+        const times = document.querySelectorAll('.tVal');
+        const vols = document.querySelectorAll('.vVal');
+        let data = [];
+        for (let i = 0; i < times.length; i++) {
+            let t = parseFloat(times[i].value);
+            let v = parseFloat(vols[i].value);
+            if (!isNaN(t) && !isNaN(v)) data.push({ t, v });
+        }
+        data.sort((a, b) => a.t - b.t);
+        return data;
+    }
+
+    // ========== 示例载入 ==========
+    function fillTable(arr) {
+        const tbody = document.getElementById('tableBody');
+        tbody.innerHTML = '';
+        arr.forEach(([t, v]) => {
+            const tr = document.createElement('tr');
+            const idx = tbody.children.length + 1;
+            tr.innerHTML = `<td>${idx}</td><td><input type="number" step="any" class="tVal" value="${t}"></td><td><input type="number" step="any" class="vVal" value="${v}"></td><td><button class="row-btn" onclick="this.closest('tr').remove(); renumber()">删除</button></td>`;
+            tbody.appendChild(tr);
+        });
+    }
+    function loadExample1() { fillTable([[0,4],[2,18],[4,30],[6,41],[8,50],[10,58],[12,65],[14,71]]); }
+    function loadExample2() { fillTable([[0,0],[2,16],[4,32],[6,48],[8,64],[10,80],[12,96],[14,112]]); }
+    function loadExample3() { fillTable([[0,0],[2,12],[4,20],[6,26],[8,30],[10,33.5],[12,36.2],[14,38.5]]); }
+    function loadExample4() { fillTable([[0,0],[2,8],[4,16],[6,24],[8,72],[10,120],[12,168],[14,216]]); }
+
+    // ========== 线性回归 ==========
+    function linReg(X, Y) {
+        const n = X.length;
+        if (n < 2) return null;
+        let sx = 0, sy = 0, sxy = 0, sx2 = 0;
+        for (let i = 0; i < n; i++) {
+            sx += X[i]; sy += Y[i]; sxy += X[i]*Y[i]; sx2 += X[i]*X[i];
+        }
+        const det = n*sx2 - sx*sx;
+        if (Math.abs(det) < 1e-12) return null;
+        const a = (sy*sx2 - sx*sxy) / det;
+        const b = (n*sxy - sx*sy) / det;
+        const yMean = sy / n;
+        let ssTot = 0, ssRes = 0;
+        for (let i = 0; i < n; i++) {
+            const yPred = a + b*X[i];
+            ssRes += (Y[i]-yPred)**2;
+            ssTot += (Y[i]-yMean)**2;
+        }
+        const r2 = ssTot < 1e-12 ? 1 : 1 - ssRes/ssTot;
+        return { a, b, r2 };
+    }
+
+    // ========== 多项式回归 ==========
+    function polyReg(X, Y, degree) {
+        const n = X.length;
+        if (n <= degree) return null;
+        const m = degree + 1;
+        const ATA = Array(m).fill().map(() => Array(m).fill(0));
+        const ATy = Array(m).fill(0);
+        for (let i = 0; i < n; i++) {
+            for (let j = 0; j < m; j++) {
+                ATy[j] += Math.pow(X[i], j) * Y[i];
+                for (let k = 0; k < m; k++) ATA[j][k] += Math.pow(X[i], j+k);
+            }
+        }
+        const aug = ATA.map((row, i) => [...row, ATy[i]]);
+        for (let col = 0; col < m; col++) {
+            let pivot = col;
+            for (let row = col+1; row < m; row++) if (Math.abs(aug[row][col]) > Math.abs(aug[pivot][col])) pivot = row;
+            [aug[col], aug[pivot]] = [aug[pivot], aug[col]];
+            if (Math.abs(aug[col][col]) < 1e-12) return null;
+            for (let row = col+1; row < m; row++) {
+                const factor = aug[row][col] / aug[col][col];
+                for (let k = col; k <= m; k++) aug[row][k] -= factor * aug[col][k];
+            }
+        }
+        const coeffs = Array(m).fill(0);
+        for (let i = m-1; i >= 0; i--) {
+            let sum = aug[i][m];
+            for (let j = i+1; j < m; j++) sum -= aug[i][j] * coeffs[j];
+            coeffs[i] = sum / aug[i][i];
+        }
+        const yMean = Y.reduce((s,v)=>s+v,0)/n;
+        let ssTot = 0, ssRes = 0;
+        for (let i=0;i<n;i++) {
+            let yPred = 0;
+            for (let d=0; d<=degree; d++) yPred += coeffs[d] * Math.pow(X[i], d);
+            ssRes += (Y[i]-yPred)**2;
+            ssTot += (Y[i]-yMean)**2;
+        }
+        const r2 = ssTot<1e-12 ? 1 : 1 - ssRes/ssTot;
+        return { coeffs, r2 };
+    }
+
+    // ========== 多函数拟合 ==========
+    function tryFits(data) {
+        const X = data.map(p => p.t);
+        const Y = data.map(p => p.v);
+        const n = X.length;
+        const results = [];
+
+        // 1. 正比例
+        if (n >= 1) {
+            let sxy=0, sx2=0;
+            for (let i=0;i<n;i++) { sxy+=X[i]*Y[i]; sx2+=X[i]*X[i]; }
+            if (sx2>1e-12) {
+                const k = sxy/sx2;
+                const yMean = Y.reduce((a,b)=>a+b,0)/n;
+                let ssTot=0, ssRes=0;
+                for (let i=0;i<n;i++) { ssRes += (Y[i]-k*X[i])**2; ssTot += (Y[i]-yMean)**2; }
+                const r2 = ssTot<1e-12?1:1-ssRes/ssTot;
+                results.push({ name:'正比例 V = k·t', func: t => k*t, params:{k}, r2, color:'#2980b9' });
+            }
+        }
+
+        // 2. 一次函数
+        const lin = linReg(X, Y);
+        if (lin) results.push({ name:'一次函数 V = a + b·t', func: t => lin.a + lin.b*t, params:{a:lin.a, b:lin.b}, r2:lin.r2, color:'#e67e22' });
+
+        // 3. 二次函数
+        if (n>=3) {
+            const quad = polyReg(X,Y,2);
+            if (quad) {
+                const [c,b,a] = quad.coeffs;
+                results.push({ name:'二次函数 V = a·t²+b·t+c', func: t => a*t*t + b*t + c, params:{a,b,c}, r2:quad.r2, color:'#8e44ad' });
+            }
+        }
+
+        // 4. 三次函数
+        if (n>=4) {
+            const cubic = polyReg(X,Y,3);
+            if (cubic) {
+                const [d,c,b,a] = cubic.coeffs;
+                results.push({ name:'三次函数 V = a·t³+b·t²+c·t+d', func: t => a*t*t*t + b*t*t + c*t + d, params:{a,b,c,d}, r2:cubic.r2, color:'#c0392b' });
+            }
+        }
+
+        // 5. 指数
+        if (Y.every(v=>v>0)) {
+            const lnY = Y.map(v=>Math.log(v));
+            const expLin = linReg(X, lnY);
+            if (expLin) {
+                const a=Math.exp(expLin.a), b=expLin.b;
+                const func = t => a*Math.exp(b*t);
+                const yMean = Y.reduce((s,v)=>s+v,0)/n;
+                let ssTot=0, ssRes=0;
+                for (let i=0;i<n;i++) { ssRes+=(Y[i]-func(X[i]))**2; ssTot+=(Y[i]-yMean)**2; }
+                const r2 = ssTot<1e-12?1:1-ssRes/ssTot;
+                results.push({ name:'指数函数 V = a·e^(b·t)', func, params:{a,b}, r2, color:'#16a085' });
+            }
+        }
+
+        // 6. 对数
+        if (X.every(t=>t>0)) {
+            const lnX = X.map(t=>Math.log(t));
+            const logLin = linReg(lnX, Y);
+            if (logLin) {
+                const a=logLin.a, b=logLin.b;
+                const func = t => a + b*Math.log(t);
+                const yMean = Y.reduce((s,v)=>s+v,0)/n;
+                let ssTot=0, ssRes=0;
+                for (let i=0;i<n;i++) { ssRes+=(Y[i]-func(X[i]))**2; ssTot+=(Y[i]-yMean)**2; }
+                const r2 = ssTot<1e-12?1:1-ssRes/ssTot;
+                results.push({ name:'对数函数 V = a + b·ln(t)', func, params:{a,b}, r2, color:'#d35400' });
+            }
+        }
+
+        // 7. 幂函数
+        if (X.every(t=>t>0) && Y.every(v=>v>0)) {
+            const lnX = X.map(t=>Math.log(t));
+            const lnY = Y.map(v=>Math.log(v));
+            const powLin = linReg(lnX, lnY);
+            if (powLin) {
+                const a=Math.exp(powLin.a), b=powLin.b;
+                const func = t => a*Math.pow(t, b);
+                const yMean = Y.reduce((s,v)=>s+v,0)/n;
+                let ssTot=0, ssRes=0;
+                for (let i=0;i<n;i++) { ssRes+=(Y[i]-func(X[i]))**2; ssTot+=(Y[i]-yMean)**2; }
+                const r2 = ssTot<1e-12?1:1-ssRes/ssTot;
+                results.push({ name:'幂函数 V = a·t^b', func, params:{a,b}, r2, color:'#7f8c8d' });
+            }
+        }
+
+        // 8. 反比例
+        if (X.every(t=>t>0)) {
+            const invX = X.map(t=>1/t);
+            const invLin = linReg(invX, Y);
+            if (invLin) {
+                const a=invLin.a, b=invLin.b;
+                const func = t => a + b/t;
+                const yMean = Y.reduce((s,v)=>s+v,0)/n;
+                let ssTot=0, ssRes=0;
+                for (let i=0;i<n;i++) { ssRes+=(Y[i]-func(X[i]))**2; ssTot+=(Y[i]-yMean)**2; }
+                const r2 = ssTot<1e-12?1:1-ssRes/ssTot;
+                results.push({ name:'反比例 V = a + b/t', func, params:{a,b}, r2, color:'#e91e63' });
+            }
+        }
+
+        // 9. Logistic
+        if (n>=4 && Y.every(v=>v>0)) {
+            const L = Math.max(...Y) * 1.15;
+            if (Y.every(v=>v<L)) {
+                const transY = Y.map(v => Math.log(L/v - 1));
+                const logisLin = linReg(X, transY);
+                if (logisLin) {
+                    const c = Math.exp(logisLin.a), k = -logisLin.b;
+                    const func = t => L/(1+c*Math.exp(-k*t));
+                    let ssTot=0, ssRes=0;
+                    const yMean = Y.reduce((s,v)=>s+v,0)/n;
+                    for (let i=0;i<n;i++) { ssRes+=(Y[i]-func(X[i]))**2; ssTot+=(Y[i]-yMean)**2; }
+                    const r2 = ssTot<1e-12?1:1-ssRes/ssTot;
+                    results.push({ name:'Logistic 饱和增长', func, params:{L,c,k}, r2, color:'#2ecc71' });
+                }
+            }
+        }
+
+        results.sort((a,b) => b.r2 - a.r2);
+        return results;
+    }
+
+    // ========== 误差分析+解决方案（生成HTML内容） ==========
+    function analyzeAndSolve(data, bestModel) {
+        const X = data.map(p => p.t);
+        const Y = data.map(p => p.v);
+        const n = X.length;
+        let analysis = [];
+        let solutions = [];
+
+        const linModel = tryFits(data).find(m => m.name.includes('一次函数'));
+        if (linModel && linModel.params.a !== undefined) {
+            const intercept = linModel.params.a;
+            if (Math.abs(intercept) > 1.5) {
+                analysis.push(`🔸 <b>初始水量不为零</b>：一次函数截距 ≈ ${intercept.toFixed(1)} mL。可能量筒未倒空。`);
+                solutions.push(`🔧 <b>解决方法：</b>调好流速后，将量筒水全部倒掉，从 0 mL 开始记录，确保计时起点与水量零点对应。`);
+            } else if (Math.abs(intercept) > 0.3) {
+                analysis.push(`🔸 <b>微小初始偏差</b>：截距 ≈ ${intercept.toFixed(1)} mL。`);
+                solutions.push(`🔧 <b>建议：</b>等待液面稳定后再读数，或多次测量取平均值。`);
+            }
+        }
+
+        if (n >= 4) {
+            const mid = Math.floor(n/2);
+            const reg1 = linReg(data.slice(0,mid+1).map(p=>p.t), data.slice(0,mid+1).map(p=>p.v));
+            const reg2 = linReg(data.slice(mid).map(p=>p.t), data.slice(mid).map(p=>p.v));
+            if (reg1 && reg2) {
+                const slopeChange = reg2.b - reg1.b;
+                const avgSlope = (reg1.b + reg2.b)/2;
+                if (Math.abs(slopeChange) > 0.12 * Math.abs(avgSlope)) {
+                    if (slopeChange < 0) {
+                        analysis.push(`🔸 <b>流速逐渐减慢</b>：后半段斜率比前半段减小 ${Math.abs(slopeChange).toFixed(3)}。水瓶水位下降导致水压减小。`);
+                        solutions.push(`🔧 <b>解决方案：</b>使用<b>马略特瓶</b>（恒压装置）保持液面高度不变；或缩短实验时间，也可以在水瓶上端插入一根通气管维持瓶内气压。`);
+                    } else {
+                        analysis.push(`🔸 <b>流速突然加快</b>：后半段斜率明显增大。可能人为调整了阀门、小孔扩大或操作中断。`);
+                        solutions.push(`🔧 <b>建议：</b>提醒学生一旦开始记录数据，不得调整装置；如果出现分段图像，可分析分段前后变化的原因。`);
+                    }
+                }
+            }
+        }
+
+        if (n >= 3) {
+            const rates = [];
+            for (let i=1;i<n;i++) {
+                const dt = data[i].t - data[i-1].t;
+                if (dt > 0) rates.push((data[i].v - data[i-1].v)/dt);
+            }
+            const avgRate = rates.reduce((s,r)=>s+r,0)/rates.length;
+            for (let i=0;i<rates.length;i++) {
+                if (Math.abs(rates[i]-avgRate) > 0.4*Math.abs(avgRate) && avgRate!==0) {
+                    analysis.push(`🔸 <b>数据突变点</b>：第${i+1}到${i+2}组间流速突然变化。可能中途调整装置或记录错误。`);
+                    solutions.push(`🔧 <b>操作规范：</b>调节流速后必须<b>重新计时</b>，并将量筒水倒空从零开始记录，不允许单次实验中调整。`);
+                    break;
+                }
+            }
+        }
+
+        if (bestModel && bestModel.r2 < 0.9) {
+            analysis.push(`🔸 <b>整体拟合度不高 (R²=${bestModel.r2.toFixed(3)})</b>：数据点较分散。`);
+            solutions.push(`🔧 <b>改进方法：</b>多次重复实验取平均值；使用更精密的量筒；减小读数时间间隔；操作时避免水滴飞溅。`);
+        }
+
+        if (bestModel) {
+            if (bestModel.name.includes('二次') || bestModel.name.includes('三次')) analysis.push(`🔹 图像明显弯曲，流速不恒定。`);
+            else if (bestModel.name.includes('幂函数')) analysis.push(`🔹 数据符合幂函数，流速有规律变化。`);
+            else if (bestModel.name.includes('对数')) analysis.push(`🔹 对数增长，前期快后期慢，可能与水位降低有关。`);
+        }
+
+        if (bestModel && n>3) {
+            const residuals = data.map(p => p.v - bestModel.func(p.t));
+            const meanRes = residuals.reduce((a,b)=>a+b,0)/n;
+            const stdRes = Math.sqrt(residuals.reduce((s,r)=>s+(r-meanRes)**2,0)/n);
+            for (let i=0;i<n;i++) {
+                if (Math.abs(residuals[i]) > 2.5*stdRes && stdRes>0.1) {
+                    analysis.push(`🔸 <b>疑似异常点</b>：时间 ${data[i].t} min，水量 ${data[i].v} mL，偏离拟合较远。`);
+                    solutions.push(`🔧 <b>建议：</b>重新测量该数据点，确认无溅出、读错或记录错误。`);
+                    break;
+                }
+            }
+        }
+
+        if (analysis.length === 0) {
+            analysis.push(`✅ <b>数据质量很好！</b>图像接近理想正比例，实验操作规范。`);
+            solutions.push(`🎉 <b>无需改进</b>，可以继续用该数据进行预测和探究。`);
+        }
+        analysis.push(`📘 <b>物理原理拓展</b>：普通水瓶小孔滴水，流速随水位下降而减慢。要获得匀速滴水，可使用<b>马略特瓶</b>（恒压设计）。`);
+        solutions.push(`📘 <b>实验优化建议汇总：</b>① 调好流速后倒空量筒从0开始；② 固定时间间隔（如每2分钟）记录；③ 避免触碰装置；④ 多次测量取平均。`);
+
+        return { analysis, solutions };
+    }
+
+    // ========== 预测水量 ==========
+    function predictWater() {
+        if (!currentBestModel) {
+            document.getElementById('predictResult').innerHTML = '<span style="color:#c0392b;">⚠️ 请先完成实验分析，获得最佳模型。</span>';
+            return;
+        }
+        const timeVal = parseFloat(document.getElementById('predictTime').value);
+        if (isNaN(timeVal) || timeVal < 0) {
+            document.getElementById('predictResult').innerHTML = '<span style="color:#c0392b;">⚠️ 请输入有效的时间数值。</span>';
+            return;
+        }
+        const unit = document.getElementById('predictUnit').value;
+        let tMinutes;
+        switch(unit) {
+            case 'min': tMinutes = timeVal; break;
+            case 'hour': tMinutes = timeVal * 60; break;
+            case 'day': tMinutes = timeVal * 24 * 60; break;
+            default: tMinutes = timeVal;
+        }
+        const predictedV = currentBestModel.func(tMinutes);
+        const liters = predictedV / 1000;
+        const bottleCount = (predictedV / 500).toFixed(1);
+        const resultHTML = `
+            <div style="background:#f4f8ff; padding:15px; border-radius:8px;">
+                ⏱️ 时间：<b>${timeVal} ${unit==='min'?'分钟':unit==='hour'?'小时':'天'}</b> ( = ${tMinutes.toFixed(1)} 分钟 )<br>
+                💧 预测总滴水量：<b>${predictedV.toFixed(2)} 毫升</b> ( ≈ ${liters.toFixed(3)} 升 )<br>
+                🧴 相当于 <b>${bottleCount} 瓶</b> 500mL 矿泉水<br>
+                <span style="font-size:13px; color:#888;">（基于最佳模型 <i>${currentBestModel.name}</i> 外推计算，请注意外推可能存在误差）</span>
+            </div>`;
+        document.getElementById('predictResult').innerHTML = resultHTML;
+    }
+
+    // ========== 独立的显示/隐藏切换 ==========
+    function toggleError() {
+        const container = document.getElementById('errorContainer');
+        const btn = document.getElementById('toggleErrorBtn');
+        if (container.style.display === 'none' || container.style.display === '') {
+            container.style.display = 'block';
+            btn.textContent = '🔽 隐藏误差分析';
+        } else {
+            container.style.display = 'none';
+            btn.textContent = '🔍 显示误差分析';
+        }
+    }
+
+    function toggleSolution() {
+        const container = document.getElementById('solutionContainer');
+        const btn = document.getElementById('toggleSolutionBtn');
+        if (container.style.display === 'none' || container.style.display === '') {
+            container.style.display = 'block';
+            btn.textContent = '🔽 隐藏改进方案';
+        } else {
+            container.style.display = 'none';
+            btn.textContent = '💡 显示改进方案';
+        }
+    }
+
+    // ========== 主分析 ==========
+    function runAnalysis() {
+        const data = getData();
+        if (data.length < 2) {
+            alert('请至少输入两组数据！');
+            return;
+        }
+        document.getElementById('resultArea').style.display = 'block';
+
+        const allModels = tryFits(data);
+        if (allModels.length === 0) {
+            alert('无法拟合任何模型，请检查数据。');
+            return;
+        }
+        currentBestModel = allModels[0];
+        const showAll = document.getElementById('showAllFits').checked;
+
+        // 绘图
+        const ctx = document.getElementById('fitChart').getContext('2d');
+        if (fitChart) fitChart.destroy();
+
+        const datasets = [{
+            label: '实验数据',
+            data: data.map(p => ({x: p.t, y: p.v})),
+            backgroundColor: '#c0392b',
+            borderColor: '#c0392b',
+            pointRadius: 5,
+            showLine: false,
+            type: 'scatter',
+            order: 0
+        }];
+
+        const tMin = data[0].t, tMax = data[data.length-1].t;
+        const step = (tMax - tMin) / 100;
+        const modelsToShow = showAll ? allModels : [currentBestModel];
+
+        modelsToShow.forEach((m, idx) => {
+            const points = [];
+            for (let t = tMin; t <= tMax; t += step) points.push({ x: t, y: m.func(t) });
+            const isBest = (idx === 0 && showAll);
+            datasets.push({
+                label: m.name + (isBest ? ' ★最佳' : ''),
+                data: points,
+                borderColor: m.color,
+                backgroundColor: 'transparent',
+                borderWidth: isBest ? 3.5 : 2,
+                borderDash: isBest ? [] : [6,3],
+                pointRadius: 0,
+                type: 'line',
+                order: 1
+            });
+        });
+
+        fitChart = new Chart(ctx, {
+            type: 'scatter',
+            data: { datasets },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    tooltip: { callbacks: { label: ctx => `(${ctx.parsed.x}, ${ctx.parsed.y.toFixed(2)})` } }
+                },
+                scales: {
+                    x: { title: { display: true, text: '时间 (分钟)' } },
+                    y: { title: { display: true, text: '水量 (毫升)' }, beginAtZero: true }
+                }
+            }
+        });
+
+        // 模型列表
+        document.getElementById('modelList').innerHTML = allModels.map((m, i) => {
+            const isBest = i === 0;
+            let paramStr = '';
+            if (m.params) paramStr = Object.entries(m.params).map(([k,v])=> `${k}=${v.toFixed(4)}`).join(', ');
+            return `<div class="model-card ${isBest ? 'best-model' : ''}">
+                <strong style="color:${m.color};">${m.name}</strong> ${isBest ? '<span class="badge">最佳拟合</span>' : ''}
+                <br>R² = ${m.r2.toFixed(4)} | 参数: ${paramStr}
+            </div>`;
+        }).join('');
+
+        // 生成误差分析与解决方案（但不自动展开）
+        const { analysis, solutions } = analyzeAndSolve(data, currentBestModel);
+        document.getElementById('errorAnalysis').innerHTML = `<div class="analysis-box">${analysis.map(a => `<p>${a}</p>`).join('')}</div>`;
+        document.getElementById('solutionArea').innerHTML = `<div class="solution-box">${solutions.map(s => `<p>${s}</p>`).join('')}</div>`;
+
+        // 确保两个区域默认隐藏，按钮文字恢复
+        document.getElementById('errorContainer').style.display = 'none';
+        document.getElementById('toggleErrorBtn').textContent = '🔍 显示误差分析';
+        document.getElementById('solutionContainer').style.display = 'none';
+        document.getElementById('toggleSolutionBtn').textContent = '💡 显示改进方案';
+
+        // 清空预测结果
+        document.getElementById('predictResult').innerHTML = '';
+    }
+
+    function clearAll() {
+        document.getElementById('tableBody').innerHTML = '';
+        document.getElementById('resultArea').style.display = 'none';
+        if (fitChart) { fitChart.destroy(); fitChart = null; }
+        currentBestModel = null;
+        initTable(6);
+    }
+
+    window.onload = () => initTable(6);
+</script>
+</body>
+</html>
